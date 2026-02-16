@@ -6,41 +6,57 @@ services:
   portainer:
     container_name: portainer
     image: portainer/portainer
-    restart: always
+    restart: no
     command: --no-auth -H unix:///var/run/docker.sock
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - ${REVERSE_PROXY_NETWORK}
     labels:
-      - "traefik.enable=true"
-      - "traefik.port=9000"
-      - "traefik.frontend.rule=Host:portainer.${BASE_DOMAIN}"
-
+      - traefik.enable=true
+      - traefik.docker.network=${REVERSE_PROXY_NETWORK}
+      - traefik.http.routers.portainer.rule=Host(`portainer.${BASE_DOMAIN}`)
+      - traefik.http.routers.portainer.entrypoints=websecure
+      - traefik.http.routers.portainer.tls=true
+      - traefik.http.services.portainer.loadbalancer.server.port=9000
   traefik:
     container_name: traefik
-    image: traefik:v1.7.24
-    restart: always
-    command: |
-      -c /dev/null \
-      --web \
-      --docker \
-      --docker.domain=${BASE_DOMAIN} \
-      --docker.exposedbydefault=false \
-      --logLevel=DEBUG \
-      --entrypoints="Name:http Address::80 Redirect.EntryPoint:https" \
-      --entryPoints="Name:https Address::443 TLS:/ssl/coom.localhost.crt,/ssl/coom.localhost.key" \
-      --defaultentrypoints="http,https"
+    image: traefik:v2.11
+    restart: unless-stopped
+    command:
+      # Providers
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+
+      # Entrypoints
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+
+      # (optionnel) redirection http -> https
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+
+      # Dashboard
+      - --api.dashboard=true
+
+      # Logs
+      - --log.level=DEBUG
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./traefik/ssl:/ssl
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./traefik/ssl:/ssl:ro
     networks:
       - ${REVERSE_PROXY_NETWORK}
     ports:
       - "80:80"
       - "443:443"
     labels:
-      - "traefik.enable=true"
-      - "traefik.port=8080"
-      - "traefik.backend=traefik"
-      - "traefik.frontend.rule=Host:traefik.${BASE_DOMAIN}"
+      - traefik.enable=true
+
+      # Router dashboard
+      - traefik.http.routers.traefik.rule=Host(`traefik.${BASE_DOMAIN}`)
+      - traefik.http.routers.traefik.entrypoints=websecure
+      - traefik.http.routers.traefik.tls=true
+      - traefik.http.routers.traefik.service=api@internal
